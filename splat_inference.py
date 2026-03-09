@@ -155,40 +155,31 @@ def main(opt: AllConfigs, args: argparse.Namespace):
         print(f"Error: Not enough frames ({V}) to form pairs.")
         return
 
-    new_frames = torch.zeros((B_new, num_output_frames, frames.shape[2], frames.shape[3], frames.shape[4]), device=device, dtype=frames.dtype)
-    new_depths = torch.zeros((B_new, num_output_frames, 1, input_depths.shape[3], input_depths.shape[4]), device=device, dtype=input_depths.dtype)
-    new_timestamps = torch.zeros((B_new, num_output_frames), device=device, dtype=timestamps.dtype)
-    
+    C_f = frames.shape[2]
+    H_f, W_f = frames.shape[3], frames.shape[4]
+    H_d, W_d = input_depths.shape[3], input_depths.shape[4]
+
     fixed_timestamps = torch.linspace(0.0, 1.0, num_output_frames, device=device, dtype=timestamps.dtype)
 
-    for k in range(B_new):
-        frame_k = frames[0, k]
-        depth_k = input_depths[0, k]
-        frame_k_plus_1 = frames[0, k + 1]
-        depth_k_plus_1 = input_depths[0, k + 1]
+    def _build_batch(start: int, end: int):
+        """Build input tensors for a batch of frame pairs on-the-fly."""
+        bs = end - start
+        bf = torch.zeros((bs, num_output_frames, C_f, H_f, W_f), device=device, dtype=frames.dtype)
+        bd = torch.zeros((bs, num_output_frames, 1, H_d, W_d), device=device, dtype=input_depths.dtype)
+        for j, k in enumerate(range(start, end)):
+            bf[j, 0] = frames[0, k]
+            bf[j, -1] = frames[0, k + 1]
+            if num_output_frames > 2:
+                bf[j, 1:-1] = frames[0, k].unsqueeze(0).repeat(num_output_frames - 2, 1, 1, 1)
+            bd[j, 0] = input_depths[0, k]
+            bd[j, -1] = input_depths[0, k + 1]
+            if num_output_frames > 2:
+                bd[j, 1:-1] = input_depths[0, k].unsqueeze(0).repeat(num_output_frames - 2, 1, 1, 1)
+        bt = fixed_timestamps.unsqueeze(0).expand(bs, -1).clone()
+        return bf, bd, bt
 
-        new_frames[k, 0] = frame_k
-        if num_output_frames > 2:
-            new_frames[k, 1:-1] = frame_k.unsqueeze(0).repeat(num_output_frames - 2, 1, 1, 1)
-        new_frames[k, -1] = frame_k_plus_1
-
-        new_depths[k, 0] = depth_k
-        if num_output_frames > 2:
-            new_depths[k, 1:-1] = depth_k.unsqueeze(0).repeat(num_output_frames - 2, 1, 1, 1)
-        new_depths[k, -1] = depth_k_plus_1
-
-        new_timestamps[k] = fixed_timestamps
-
-    data = {
-        'frames': new_frames,
-        'depths': new_depths,
-        'timestamps': new_timestamps,
-    }
-
-    print(f"Rearranged data from [1, {V}, ...] to [{B_new}, {num_output_frames}, ...]")
+    print(f"Processing {B_new} frame pairs in batches of {args.batch_size} ...")
     output_prefix = ""
-
-    B_new = data['frames'].shape[0]
 
     # --- Inference ---
     print("Running inference...")
@@ -200,13 +191,15 @@ def main(opt: AllConfigs, args: argparse.Namespace):
                 print(f"Warning: Dropping last {B_new - i} samples to avoid batch size mismatch with torch.compile. Consider setting batch_size to a divisor of {B_new} or disable torch.compile.")
                 break
             print(f"Processing frames {i+1} to {end_index}")
+            batch_frames, batch_depths, batch_ts = _build_batch(i, end_index)
             pair_data = {
-                'frames': data['frames'][i:end_index],
-                'depths': data['depths'][i:end_index],
-                'timestamps': data['timestamps'][i:end_index],
+                'frames': batch_frames,
+                'depths': batch_depths,
+                'timestamps': batch_ts,
             }
             output = model(pair_data)
             results['pred_frames'] = results.get('pred_frames', []) + [output['pred_frames']]
+            del batch_frames, batch_depths, batch_ts
         
         results['pred_frames'] = torch.cat(results['pred_frames'], dim=0) # [B_new, num_new_frames, C, H, W]
     

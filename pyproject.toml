@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamsplat"
-version = "0.1.0"
+version = "0.1.4"
 description = "Feed-forward framework for online dynamic 3D reconstruction from uncalibrated video streams"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,8 +21,9 @@ dependencies = [
     "lpips",
     "transformers>=4.40",
     "timm",
+    "kiui",
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["streamsplat*", "model*", "configs*", "encoders*", "datasets*", "gaussian_renderer_dynamic*", "utils*"]
+where = [".", "submodules/diff-gaussian-rasterization-orth"]
+include = ["streamsplat*", "model*", "configs*", "encoders*", "datasets*", "gaussian_renderer_dynamic*", "utils*", "diff_gaussian_rasterization_kiui_orth*"]
